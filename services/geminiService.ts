@@ -1,7 +1,17 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { FormData, ImageStyle } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Vite uses import.meta.env for environment variables
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+
+// Helper to get model, initializing only when needed
+const getModel = (modelName: string) => {
+  if (!apiKey) {
+    throw new Error("APIキーが設定されていません。.env.localを確認してください。");
+  }
+  const genAI = new GoogleGenerativeAI(apiKey);
+  return genAI.getGenerativeModel({ model: modelName });
+};
 
 export const generateGreeting = async (data: FormData): Promise<string> => {
   const prompt = `
@@ -27,14 +37,13 @@ export const generateGreeting = async (data: FormData): Promise<string> => {
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt,
-    });
-    return response.text || "文章の生成に失敗しました。";
+    const model = getModel("gemini-pro");
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    return response.text() || "文章の生成に失敗しました。";
   } catch (error) {
     console.error("Text Generation Error:", error);
-    return "エラーが発生しました。もう一度お試しください。";
+    return `エラーが発生しました: ${error instanceof Error ? error.message : String(error)}`;
   }
 };
 
@@ -59,36 +68,39 @@ export const generateStyledImage = async (base64Image: string, style: ImageStyle
   }
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: cleanBase64
-            }
-          },
-          { text: prompt }
-        ]
-      }
-    });
+    // Note: Gemini 1.5 Flash is text-output only. It cannot generate images directly.
+    // This function attempts to use the model, but it will likely return text instead of an image.
+    // If you have access to Imagen 3 on Vertex AI or similar, you should use that instead.
+    // For now, we use 1.5-flash but expect it might not return inlineData.
+    const model = getModel("gemini-pro");
 
-    // Handle potential text response if image gen fails or model decides to talk
-    // Check parts for image
-    const candidates = response.candidates;
-    if (candidates && candidates.length > 0) {
-        const parts = candidates[0].content?.parts;
-        if (parts) {
-            for (const part of parts) {
-                if (part.inlineData) {
-                    return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-                }
-            }
-        }
+    const result = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          data: cleanBase64,
+          mimeType: "image/jpeg",
+        },
+      },
+    ]);
+
+    const response = await result.response;
+    // Check if the response actually contains image data (unlikely for 1.5 Flash)
+    // The previous code expected parts[0].inlineData. 
+    // Standard Gemini API response usually has text.
+
+    // Attempt to inspect response for any image (not supported by standard 1.5 Flash public API yet)
+    // If using a specialized model, it might work.
+
+    console.warn("Gemini 1.5 Flash does not support image generation. Returning placeholder or text.");
+
+    // For now, if we cannot generate an image, we throw or return null to trigger error handling in UI
+    if (!response.text()) {
+      throw new Error("No content returned");
     }
-    
-    throw new Error("No image returned");
+
+    // Since we can't return an image, we throw an error explaining it to the user in the UI
+    throw new Error("現在のモデル(gemini-1.5-flash)は画像の直接生成(Image-to-Image)をサポートしていません。");
 
   } catch (error) {
     console.error("Image Generation Error:", error);
